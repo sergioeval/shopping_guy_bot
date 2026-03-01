@@ -125,4 +125,4 @@ shopping_guy_bot/
 
 ## Licencia
 
-MIT
+Este proyecto está bajo la licencia [MIT](LICENSE).
