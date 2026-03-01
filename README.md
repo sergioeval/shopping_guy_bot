@@ -77,15 +77,18 @@ Una vez en marcha, abre tu bot en Telegram y usa estos comandos:
 | `/start` | Iniciar el bot y ver comandos disponibles |
 | `/nueva_lista` | Crear una nueva lista (te pedirá el nombre) |
 | `/agregar_producto` | Agregar un producto (nombre, precio y lista) |
-| `/total` | Ver total y detalle de una lista |
+| `/total` | Ver total y detalle de una lista (con botones para marcar) |
+| `/marcar_producto` | Marcar/desmarcar productos como seleccionados |
+| `/clonar_lista` | Clonar una lista con un nombre nuevo |
 | `/eliminar_lista` | Eliminar una lista |
 | `/listas` | Ver todas tus listas |
 | `/cancel` | Cancelar la operación actual |
 
 ### Detalles
 
-- **"null"**: En `/agregar_producto` y `/total`, si respondes `null` (o nulo, última) al preguntar la lista, se usará la última lista creada.
+- **"null"**: En `/agregar_producto`, `/total` y `/marcar_producto`, si respondes `null` (o nulo, última) al preguntar la lista, se usará la última lista creada.
 - **Texto en minúsculas**: Los nombres de listas y productos se guardan siempre en minúsculas.
+- **Marcar productos**: En `/total` aparecen botones para marcar cada producto como seleccionado (✓) o no (○). También puedes usar `/marcar_producto` e indicar el número del producto.
 
 ---
 

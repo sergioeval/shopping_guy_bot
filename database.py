@@ -32,9 +32,15 @@ def init_db():
                 id_lista INTEGER NOT NULL,
                 producto TEXT NOT NULL,
                 precio REAL NOT NULL,
+                seleccionado INTEGER DEFAULT 0,
                 FOREIGN KEY (id_lista) REFERENCES listas(id)
             )
         """)
+        # Migración: agregar columna seleccionado si no existe (DBs antiguas)
+        try:
+            conn.execute("ALTER TABLE productos ADD COLUMN seleccionado INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # La columna ya existe
         conn.commit()
     finally:
         conn.close()
@@ -61,6 +67,19 @@ def obtener_ultima_lista(user_id: int) -> dict | None:
         row = conn.execute(
             "SELECT id, nombre, timestamp_creacion FROM listas WHERE user_id = ? ORDER BY timestamp_creacion DESC LIMIT 1",
             (user_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def obtener_lista_por_id(id_lista: int, user_id: int) -> dict | None:
+    """Obtiene una lista por su ID si pertenece al usuario."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, nombre, timestamp_creacion FROM listas WHERE id = ? AND user_id = ?",
+            (id_lista, user_id)
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -95,14 +114,50 @@ def agregar_producto(id_lista: int, producto: str, precio: float) -> int:
 
 
 def obtener_productos_de_lista(id_lista: int) -> list[dict]:
-    """Obtiene todos los productos de una lista."""
+    """Obtiene todos los productos de una lista (incluye seleccionado)."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, producto, precio FROM productos WHERE id_lista = ? ORDER BY id",
+            "SELECT id, producto, precio, COALESCE(seleccionado, 0) as seleccionado FROM productos WHERE id_lista = ? ORDER BY id",
             (id_lista,)
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def obtener_producto_por_id(id_producto: int, user_id: int) -> dict | None:
+    """Obtiene un producto por ID si pertenece a una lista del usuario."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT p.id, p.id_lista, p.producto, p.precio, COALESCE(p.seleccionado, 0) as seleccionado
+               FROM productos p
+               JOIN listas l ON p.id_lista = l.id
+               WHERE p.id = ? AND l.user_id = ?""",
+            (id_producto, user_id)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def toggle_producto(id_producto: int, user_id: int) -> bool | None:
+    """Alterna el estado seleccionado de un producto. Retorna el nuevo estado (True/False) o None si no existe/no autorizado."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT p.id, p.seleccionado FROM productos p
+               JOIN listas l ON p.id_lista = l.id
+               WHERE p.id = ? AND l.user_id = ?""",
+            (id_producto, user_id)
+        ).fetchone()
+        if not row:
+            return None
+        nuevo = 0 if row["seleccionado"] else 1
+        conn.execute("UPDATE productos SET seleccionado = ? WHERE id = ?", (nuevo, id_producto))
+        conn.commit()
+        return bool(nuevo)
     finally:
         conn.close()
 
@@ -123,6 +178,26 @@ def listar_listas_usuario(user_id: int) -> list[dict]:
             (user_id,)
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def clonar_lista(id_lista_origen: int, nombre_nuevo: str, user_id: int) -> int | None:
+    """Clona una lista con todos sus productos. Retorna el ID de la nueva lista o None si falla."""
+    lista = obtener_lista_por_id(id_lista_origen, user_id)
+    if not lista:
+        return None
+    productos = obtener_productos_de_lista(id_lista_origen)
+    nueva_id = crear_lista(nombre_nuevo.strip().lower(), user_id)
+    conn = get_connection()
+    try:
+        for p in productos:
+            conn.execute(
+                "INSERT INTO productos (id_lista, producto, precio, seleccionado) VALUES (?, ?, ?, 0)",
+                (nueva_id, p["producto"], p["precio"])
+            )
+        conn.commit()
+        return nueva_id
     finally:
         conn.close()
 
