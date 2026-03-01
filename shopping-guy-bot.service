@@ -1,0 +1,18 @@
+[Unit]
+Description=Bot de Telegram - Listas del Supermercado (Shopping Guy)
+After=network.target
+
+[Service]
+Type=simple
+User=sev
+Group=sev
+WorkingDirectory=/home/sev/projects/shopping_guy
+ExecStart=/home/sev/projects/shopping_guy/.venv/bin/python -u bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shopping-guy-bot
+
+[Install]
+WantedBy=multi-user.target
