@@ -22,7 +22,10 @@ import database as db
 load_dotenv(Path(__file__).parent / ".env")
 
 # Estados para ConversationHandler
-NOMBRE_LISTA, NOMBRE_PRODUCTO, PRECIO_PRODUCTO, LISTA_PRODUCTO, LISTA_TOTAL, LISTA_ELIMINAR, LISTA_MARCAR, NUMERO_PRODUCTO, LISTA_CLONAR_ORIGEN, NOMBRE_CLON = range(10)
+(NOMBRE_LISTA, NOMBRE_PRODUCTO, PRECIO_PRODUCTO, LISTA_PRODUCTO, LISTA_TOTAL, LISTA_ELIMINAR,
+ LISTA_MARCAR, NUMERO_PRODUCTO, LISTA_CLONAR_ORIGEN, NOMBRE_CLON,
+ LISTA_EDITAR_SELECCION, NOMBRE_NUEVO_LISTA,
+ LISTA_EDITAR_PRODUCTO, PRODUCTO_EDITAR_SELECCION, PRODUCTO_EDITAR_CAMPO, PRODUCTO_EDITAR_VALOR) = range(16)
 
 # Valores que el usuario puede enviar para "null"
 NULL_VALUES = ("null", "nulo", "ninguna", "ultima", "última", "")
@@ -78,6 +81,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/marcar_producto - Marcar/desmarcar producto como seleccionado\n"
         "/clonar_lista - Clonar una lista con nombre nuevo\n"
         "/eliminar_lista - Eliminar una lista\n"
+        "/editar_lista - Cambiar el nombre de una lista\n"
+        "/editar_producto - Cambiar nombre o precio de un producto\n"
         "/listas - Ver todas tus listas"
     )
 
@@ -385,6 +390,179 @@ async def clonar_lista_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
+# --- /editar_lista ---
+async def editar_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Inicia el flujo de editar nombre de lista."""
+    await update.message.reply_text(
+        "📝 ¿Qué lista quieres renombrar? (responde null para la última lista)"
+    )
+    return LISTA_EDITAR_SELECCION
+
+
+async def editar_lista_seleccion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibe la lista y pide el nuevo nombre."""
+    user_id = update.effective_user.id
+    nombre_lista_input = update.message.text
+
+    if is_null(nombre_lista_input):
+        lista = db.obtener_ultima_lista(user_id)
+    else:
+        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
+
+    if not lista:
+        await update.message.reply_text("❌ Lista no encontrada.")
+        return ConversationHandler.END
+
+    context.user_data["editar_lista_id"] = lista["id"]
+    await update.message.reply_text(f"✏️ Lista «{lista['nombre']}». Escribe el nuevo nombre:")
+    return NOMBRE_NUEVO_LISTA
+
+
+async def editar_lista_nuevo_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Actualiza el nombre de la lista."""
+    nombre_nuevo = update.message.text.strip()
+    if not nombre_nuevo:
+        await update.message.reply_text("❌ El nombre no puede estar vacío. Intenta de nuevo:")
+        return NOMBRE_NUEVO_LISTA
+
+    user_id = update.effective_user.id
+    id_lista = context.user_data.get("editar_lista_id")
+    if not id_lista:
+        await update.message.reply_text("❌ Error. Intenta de nuevo con /editar_lista")
+        return ConversationHandler.END
+
+    if db.actualizar_nombre_lista(id_lista, nombre_nuevo, user_id):
+        await update.message.reply_text(f"✅ Lista renombrada a «{nombre_nuevo.strip().lower()}»")
+    else:
+        await update.message.reply_text("❌ No se pudo actualizar la lista.")
+
+    context.user_data.pop("editar_lista_id", None)
+    return ConversationHandler.END
+
+
+# --- /editar_producto ---
+async def editar_producto_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Inicia el flujo de editar producto."""
+    await update.message.reply_text(
+        "📋 ¿De qué lista es el producto? (responde null para la última lista)"
+    )
+    return LISTA_EDITAR_PRODUCTO
+
+
+async def editar_producto_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Muestra productos numerados y pide el número a editar."""
+    user_id = update.effective_user.id
+    nombre_lista_input = update.message.text
+
+    if is_null(nombre_lista_input):
+        lista = db.obtener_ultima_lista(user_id)
+    else:
+        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
+
+    if not lista:
+        await update.message.reply_text("❌ Lista no encontrada.")
+        return ConversationHandler.END
+
+    productos, _ = db.calcular_total_lista(lista["id"])
+    if not productos:
+        await update.message.reply_text(f"📋 La lista «{lista['nombre']}» está vacía.")
+        return ConversationHandler.END
+
+    context.user_data["editar_producto_lista_id"] = lista["id"]
+    context.user_data["editar_productos"] = productos
+
+    lineas = [f"📋 *{lista['nombre']}* — Elige el número del producto a editar:\n"]
+    for i, p in enumerate(productos, 1):
+        icono = "✅" if p.get("seleccionado") else "⬜"
+        lineas.append(f"  {i}. {icono} {p['producto']} — ${p['precio']:.2f}")
+
+    await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
+    await update.message.reply_text("Escribe el número del producto (1, 2, 3...) o /cancel para salir:")
+    return PRODUCTO_EDITAR_SELECCION
+
+
+async def editar_producto_seleccion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibe el número y pregunta qué campo editar."""
+    try:
+        num = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Escribe un número válido (ej: 1, 2, 3):")
+        return PRODUCTO_EDITAR_SELECCION
+
+    productos = context.user_data.get("editar_productos", [])
+    if num < 1 or num > len(productos):
+        await update.message.reply_text(f"❌ Número inválido. Elige entre 1 y {len(productos)}:")
+        return PRODUCTO_EDITAR_SELECCION
+
+    producto = productos[num - 1]
+    context.user_data["editar_producto_id"] = producto["id"]
+    await update.message.reply_text(
+        f"✏️ Producto: *{producto['producto']}* — ${producto['precio']:.2f}\n\n"
+        "¿Qué quieres cambiar? Responde:\n"
+        "  • *nombre* — para cambiar el nombre\n"
+        "  • *precio* o *monto* — para cambiar el precio",
+        parse_mode="Markdown"
+    )
+    return PRODUCTO_EDITAR_CAMPO
+
+
+async def editar_producto_campo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibe nombre/precio y pide el nuevo valor."""
+    texto = update.message.text.strip().lower()
+    if texto in ("nombre", "producto"):
+        context.user_data["editar_producto_campo"] = "nombre"
+        await update.message.reply_text("✏️ Escribe el nuevo nombre del producto:")
+    elif texto in ("precio", "monto"):
+        context.user_data["editar_producto_campo"] = "precio"
+        await update.message.reply_text("✏️ Escribe el nuevo precio (ej: 15.50):")
+    else:
+        await update.message.reply_text("❌ Responde «nombre» o «precio»:")
+        return PRODUCTO_EDITAR_CAMPO
+    return PRODUCTO_EDITAR_VALOR
+
+
+async def editar_producto_valor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recibe el nuevo valor y actualiza el producto."""
+    user_id = update.effective_user.id
+    id_producto = context.user_data.get("editar_producto_id")
+    campo = context.user_data.get("editar_producto_campo")
+
+    if not id_producto or not campo:
+        await update.message.reply_text("❌ Error. Intenta de nuevo con /editar_producto")
+        return ConversationHandler.END
+
+    producto_nuevo = None
+    precio_nuevo = None
+    if campo == "nombre":
+        nombre = update.message.text.strip()
+        if not nombre:
+            await update.message.reply_text("❌ El nombre no puede estar vacío. Intenta de nuevo:")
+            return PRODUCTO_EDITAR_VALOR
+        producto_nuevo = nombre
+        precio_nuevo = None  # mantener precio actual
+    else:
+        precio = parse_precio(update.message.text)
+        if precio is None or precio < 0:
+            await update.message.reply_text("❌ Precio inválido. Escribe un número (ej: 15.50):")
+            return PRODUCTO_EDITAR_VALOR
+        precio_nuevo = precio
+        producto_nuevo = None  # mantener nombre actual
+
+    if db.actualizar_producto(id_producto, producto_nuevo, precio_nuevo, user_id):
+        prod = db.obtener_producto_por_id(id_producto, user_id)
+        await update.message.reply_text(
+            f"✅ Actualizado: {prod['producto']} — ${prod['precio']:.2f}"
+        )
+    else:
+        await update.message.reply_text("❌ No se pudo actualizar el producto.")
+
+    context.user_data.pop("editar_producto_lista_id", None)
+    context.user_data.pop("editar_productos", None)
+    context.user_data.pop("editar_producto_id", None)
+    context.user_data.pop("editar_producto_campo", None)
+    return ConversationHandler.END
+
+
 async def listas_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lista todas las listas del usuario."""
     user_id = update.effective_user.id
@@ -419,6 +597,8 @@ async def post_init(application: Application) -> None:
         ("marcar_producto", "Marcar/desmarcar producto como seleccionado"),
         ("clonar_lista", "Clonar una lista con nombre nuevo"),
         ("eliminar_lista", "Eliminar una lista"),
+        ("editar_lista", "Cambiar nombre de una lista"),
+        ("editar_producto", "Cambiar nombre o precio de un producto"),
         ("listas", "Ver todas tus listas"),
     ])
 
@@ -497,6 +677,28 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # Handler para /editar_lista
+    conv_editar_lista = ConversationHandler(
+        entry_points=[CommandHandler("editar_lista", editar_lista_start)],
+        states={
+            LISTA_EDITAR_SELECCION: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_lista_seleccion)],
+            NOMBRE_NUEVO_LISTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_lista_nuevo_nombre)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    # Handler para /editar_producto
+    conv_editar_producto = ConversationHandler(
+        entry_points=[CommandHandler("editar_producto", editar_producto_start)],
+        states={
+            LISTA_EDITAR_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_lista)],
+            PRODUCTO_EDITAR_SELECCION: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_seleccion)],
+            PRODUCTO_EDITAR_CAMPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_campo)],
+            PRODUCTO_EDITAR_VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_valor)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     application.add_handler(CallbackQueryHandler(toggle_producto_callback, pattern="^toggle:"))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_nueva_lista)
@@ -505,6 +707,8 @@ def main() -> None:
     application.add_handler(conv_eliminar)
     application.add_handler(conv_marcar)
     application.add_handler(conv_clonar)
+    application.add_handler(conv_editar_lista)
+    application.add_handler(conv_editar_producto)
     application.add_handler(CommandHandler("listas", listas_command))
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)

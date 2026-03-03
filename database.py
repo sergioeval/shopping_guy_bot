@@ -202,6 +202,39 @@ def clonar_lista(id_lista_origen: int, nombre_nuevo: str, user_id: int) -> int |
         conn.close()
 
 
+def actualizar_nombre_lista(id_lista: int, nombre_nuevo: str, user_id: int) -> bool:
+    """Actualiza el nombre de una lista. Retorna True si se actualizó."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE listas SET nombre = ? WHERE id = ? AND user_id = ?",
+            (nombre_nuevo.strip().lower(), id_lista, user_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def actualizar_producto(id_producto: int, producto: str | None, precio: float | None, user_id: int) -> bool:
+    """Actualiza nombre y/o precio de un producto. Retorna True si se actualizó."""
+    prod = obtener_producto_por_id(id_producto, user_id)
+    if not prod:
+        return False
+    nuevo_producto = producto.strip().lower() if producto and producto.strip() else prod["producto"]
+    nuevo_precio = float(precio) if precio is not None and precio >= 0 else prod["precio"]
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "UPDATE productos SET producto = ?, precio = ? WHERE id = ?",
+            (nuevo_producto, nuevo_precio, id_producto)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def eliminar_lista(id_lista: int, user_id: int) -> bool:
     """Elimina una lista y sus productos. Retorna True si se eliminó."""
     conn = get_connection()
