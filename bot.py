@@ -22,13 +22,15 @@ import database as db
 load_dotenv(Path(__file__).parent / ".env")
 
 # Estados para ConversationHandler
-(NOMBRE_LISTA, NOMBRE_PRODUCTO, PRECIO_PRODUCTO, LISTA_PRODUCTO, LISTA_TOTAL, LISTA_ELIMINAR,
- LISTA_MARCAR, NUMERO_PRODUCTO, LISTA_CLONAR_ORIGEN, NOMBRE_CLON,
- LISTA_EDITAR_SELECCION, NOMBRE_NUEVO_LISTA,
- LISTA_EDITAR_PRODUCTO, PRODUCTO_EDITAR_SELECCION, PRODUCTO_EDITAR_CAMPO, PRODUCTO_EDITAR_VALOR) = range(16)
-
-# Valores que el usuario puede enviar para "null"
-NULL_VALUES = ("null", "nulo", "ninguna", "ultima", "última", "")
+(
+    NOMBRE_PRODUCTO,
+    PRECIO_PRODUCTO,
+    RESET_CONFIRMAR,
+    NUMERO_PRODUCTO,
+    PRODUCTO_EDITAR_SELECCION,
+    PRODUCTO_EDITAR_CAMPO,
+    PRODUCTO_EDITAR_VALOR,
+) = range(7)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,18 +39,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def is_null(text: str | None) -> bool:
-    """Verifica si el usuario indicó null/última lista."""
-    if not text or not str(text).strip():
-        return True
-    return str(text).strip().lower() in NULL_VALUES
-
-
 def formatear_lista_con_checks(lista: dict, productos: list[dict]) -> tuple[str, InlineKeyboardMarkup]:
     """Retorna (texto formateado, teclado inline) para mostrar una lista con checkboxes.
     El total solo suma los productos marcados como seleccionados."""
     total = sum(p["precio"] for p in productos if p.get("seleccionado"))
-    lineas = [f"📋 *{lista['nombre']}*\n"]
+    lineas = ["📋 *Tu lista*\n"]
     keyboard = []
     for p in productos:
         icono = "✅" if p.get("seleccionado") else "⬜"
@@ -74,37 +69,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Comando /start."""
     await update.message.reply_text(
         "🛒 ¡Hola! Soy tu bot de listas del super.\n\n"
+        "Tienes una sola lista; todos los productos van ahí.\n\n"
         "Comandos disponibles:\n"
-        "/nueva_lista - Crear una nueva lista\n"
-        "/agregar_producto - Agregar producto a una lista\n"
-        "/total - Ver total y detalle de una lista\n"
-        "/marcar_producto - Marcar/desmarcar producto como seleccionado\n"
-        "/clonar_lista - Clonar una lista con nombre nuevo\n"
-        "/eliminar_lista - Eliminar una lista\n"
-        "/editar_lista - Cambiar el nombre de una lista\n"
-        "/editar_producto - Cambiar nombre o precio de un producto\n"
-        "/listas - Ver todas tus listas"
+        "/agregar_producto — Agregar producto con precio\n"
+        "/total — Ver lista, marcar con los botones y ver total de seleccionados\n"
+        "/marcar_producto — Marcar o desmarcar por número\n"
+        "/editar_producto — Cambiar nombre o precio de un producto\n"
+        "/resetear_lista — Vaciar la lista (pedirá confirmación)\n"
+        "/lista — Resumen de tu lista"
     )
-
-
-# --- /nueva_lista ---
-async def nueva_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de crear lista."""
-    await update.message.reply_text("📝 ¿Cómo quieres llamar a la nueva lista?")
-    return NOMBRE_LISTA
-
-
-async def nueva_lista_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibe el nombre y crea la lista."""
-    nombre = update.message.text.strip()
-    if not nombre:
-        await update.message.reply_text("❌ El nombre no puede estar vacío. Intenta de nuevo:")
-        return NOMBRE_LISTA
-
-    user_id = update.effective_user.id
-    lista_id = db.crear_lista(nombre, user_id)
-    await update.message.reply_text(f"✅ Lista «{nombre}» creada correctamente (ID: {lista_id})")
-    return ConversationHandler.END
 
 
 # --- /agregar_producto ---
@@ -122,119 +95,65 @@ async def agregar_producto_nombre(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def agregar_producto_precio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Guarda el precio y pide la lista."""
+    """Guarda el precio y agrega el producto a la lista única."""
     precio = parse_precio(update.message.text)
     if precio is None or precio < 0:
         await update.message.reply_text("❌ Precio inválido. Escribe un número (ej: 15.50):")
         return PRECIO_PRODUCTO
 
-    context.user_data["producto_precio"] = precio
-    await update.message.reply_text(
-        "📋 ¿En qué lista guardarlo? (responde null para usar la última lista)"
-    )
-    return LISTA_PRODUCTO
-
-
-async def agregar_producto_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Determina la lista y agrega el producto."""
     user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-        if not lista:
-            await update.message.reply_text(
-                "❌ No tienes ninguna lista. Crea una primero con /nueva_lista"
-            )
-            return ConversationHandler.END
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-        if not lista:
-            await update.message.reply_text(f"❌ No existe una lista llamada «{nombre_lista_input.strip()}»")
-            return ConversationHandler.END
-
+    lista = db.obtener_o_crear_lista_unica(user_id)
     producto = context.user_data.get("producto_nombre", "")
-    precio = context.user_data.get("producto_precio", 0)
     db.agregar_producto(lista["id"], producto, precio)
 
-    await update.message.reply_text(
-        f"✅ Agregado: {producto} - ${precio:.2f} → lista «{lista['nombre']}»"
-    )
+    await update.message.reply_text(f"✅ Agregado: {producto} — ${precio:.2f}")
     context.user_data.pop("producto_nombre", None)
-    context.user_data.pop("producto_precio", None)
     return ConversationHandler.END
 
 
 # --- /total ---
-async def total_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de ver total."""
-    await update.message.reply_text(
-        "📊 ¿De qué lista quieres ver el total? (responde null para la última lista)"
-    )
-    return LISTA_TOTAL
-
-
-async def total_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Muestra el detalle y total de la lista."""
+async def total_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra el detalle y total de la lista única."""
     user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-        if not lista:
-            await update.message.reply_text(
-                "❌ No tienes ninguna lista. Crea una primero con /nueva_lista"
-            )
-            return ConversationHandler.END
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-        if not lista:
-            await update.message.reply_text(f"❌ No existe una lista llamada «{nombre_lista_input.strip()}»")
-            return ConversationHandler.END
-
+    lista = db.obtener_o_crear_lista_unica(user_id)
     productos, _ = db.calcular_total_lista(lista["id"])
 
     if not productos:
-        await update.message.reply_text(f"📋 Lista «{lista['nombre']}» está vacía.\nTotal: $0.00")
-        return ConversationHandler.END
+        await update.message.reply_text("📋 Tu lista está vacía.\nTotal: $0.00")
+        return
 
     texto, teclado = formatear_lista_con_checks(lista, productos)
     await update.message.reply_text(texto, parse_mode="Markdown", reply_markup=teclado)
-    return ConversationHandler.END
 
 
-# --- /eliminar_lista ---
-async def eliminar_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de eliminar lista."""
-    await update.message.reply_text(
-        "🗑 ¿Qué lista quieres eliminar? (responde null para eliminar la última lista)"
-    )
-    return LISTA_ELIMINAR
-
-
-async def eliminar_lista_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Elimina la lista indicada."""
+# --- /resetear_lista ---
+async def resetear_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Pide confirmación antes de vaciar la lista."""
     user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
+    lista = db.obtener_o_crear_lista_unica(user_id)
+    productos, _ = db.calcular_total_lista(lista["id"])
+    if not productos:
+        await update.message.reply_text("📋 Tu lista ya está vacía.")
+        return ConversationHandler.END
 
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-        if not lista:
-            await update.message.reply_text(
-                "❌ No tienes ninguna lista para eliminar."
-            )
-            return ConversationHandler.END
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-        if not lista:
-            await update.message.reply_text(f"❌ No existe una lista llamada «{nombre_lista_input.strip()}»")
-            return ConversationHandler.END
+    await update.message.reply_text(
+        "🗑 Se borrarán *todos* los productos de tu lista. "
+        "Para confirmar escribe *si* (o /cancel para salir).",
+        parse_mode="Markdown",
+    )
+    return RESET_CONFIRMAR
 
-    eliminada = db.eliminar_lista(lista["id"], user_id)
-    if eliminada:
-        await update.message.reply_text(f"✅ Lista «{lista['nombre']}» eliminada correctamente.")
-    else:
-        await update.message.reply_text("❌ No se pudo eliminar la lista.")
+
+async def resetear_lista_confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vaciar la lista si el usuario confirma."""
+    texto = update.message.text.strip().lower()
+    if texto not in ("si", "sí", "yes"):
+        await update.message.reply_text("Operación cancelada; la lista no se modificó.")
+        return ConversationHandler.END
+
+    user_id = update.effective_user.id
+    n = db.vaciar_productos_lista_unica(user_id)
+    await update.message.reply_text(f"✅ Lista vaciada ({n} producto(s) eliminados).")
     return ConversationHandler.END
 
 
@@ -269,36 +188,18 @@ async def toggle_producto_callback(update: Update, context: ContextTypes.DEFAULT
 
 # --- /marcar_producto ---
 async def marcar_producto_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de marcar/desmarcar producto."""
-    await update.message.reply_text(
-        "📋 ¿De qué lista? (responde null para la última lista)"
-    )
-    return LISTA_MARCAR
-
-
-async def marcar_producto_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Muestra los productos numerados y pide el número a marcar/desmarcar."""
     user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-
-    if not lista:
-        await update.message.reply_text("❌ Lista no encontrada.")
-        return ConversationHandler.END
+    lista = db.obtener_o_crear_lista_unica(user_id)
 
     productos, _ = db.calcular_total_lista(lista["id"])
     if not productos:
-        await update.message.reply_text(f"📋 La lista «{lista['nombre']}» está vacía.")
+        await update.message.reply_text("📋 Tu lista está vacía.")
         return ConversationHandler.END
 
-    context.user_data["marcar_lista_id"] = lista["id"]
     context.user_data["marcar_productos"] = productos
 
-    lineas = [f"📋 *{lista['nombre']}* — Marca el número a marcar/desmarcar:\n"]
+    lineas = ["📋 *Tu lista* — escribe el número a marcar o desmarcar:\n"]
     for i, p in enumerate(productos, 1):
         icono = "✅" if p.get("seleccionado") else "⬜"
         lineas.append(f"  {i}. {icono} {p['producto']} — ${p['precio']:.2f}")
@@ -331,147 +232,24 @@ async def marcar_producto_numero(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await update.message.reply_text("❌ No se pudo actualizar.")
 
-    context.user_data.pop("marcar_lista_id", None)
     context.user_data.pop("marcar_productos", None)
-    return ConversationHandler.END
-
-
-# --- /clonar_lista ---
-async def clonar_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de clonar lista."""
-    await update.message.reply_text(
-        "📋 ¿Qué lista quieres clonar? (responde null para la última lista)"
-    )
-    return LISTA_CLONAR_ORIGEN
-
-
-async def clonar_lista_origen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibe la lista origen y pide el nombre para la nueva."""
-    user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-
-    if not lista:
-        await update.message.reply_text("❌ Lista no encontrada.")
-        return ConversationHandler.END
-
-    context.user_data["clonar_lista_id"] = lista["id"]
-    await update.message.reply_text(f"📝 ¿Qué nombre quieres para la nueva lista? (clonando «{lista['nombre']}»)")
-    return NOMBRE_CLON
-
-
-async def clonar_lista_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Crea la lista clonada con el nombre indicado."""
-    nombre_nuevo = update.message.text.strip()
-    if not nombre_nuevo:
-        await update.message.reply_text("❌ El nombre no puede estar vacío. Intenta de nuevo:")
-        return NOMBRE_CLON
-
-    user_id = update.effective_user.id
-    id_lista_origen = context.user_data.get("clonar_lista_id")
-    if not id_lista_origen:
-        await update.message.reply_text("❌ Error. Intenta de nuevo con /clonar_lista")
-        return ConversationHandler.END
-
-    nueva_id = db.clonar_lista(id_lista_origen, nombre_nuevo, user_id)
-    if nueva_id:
-        productos, _ = db.calcular_total_lista(id_lista_origen)
-        await update.message.reply_text(
-            f"✅ Lista clonada como «{nombre_nuevo.strip().lower()}» con {len(productos)} productos."
-        )
-    else:
-        await update.message.reply_text("❌ No se pudo clonar la lista.")
-
-    context.user_data.pop("clonar_lista_id", None)
-    return ConversationHandler.END
-
-
-# --- /editar_lista ---
-async def editar_lista_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de editar nombre de lista."""
-    await update.message.reply_text(
-        "📝 ¿Qué lista quieres renombrar? (responde null para la última lista)"
-    )
-    return LISTA_EDITAR_SELECCION
-
-
-async def editar_lista_seleccion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recibe la lista y pide el nuevo nombre."""
-    user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-
-    if not lista:
-        await update.message.reply_text("❌ Lista no encontrada.")
-        return ConversationHandler.END
-
-    context.user_data["editar_lista_id"] = lista["id"]
-    await update.message.reply_text(f"✏️ Lista «{lista['nombre']}». Escribe el nuevo nombre:")
-    return NOMBRE_NUEVO_LISTA
-
-
-async def editar_lista_nuevo_nombre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Actualiza el nombre de la lista."""
-    nombre_nuevo = update.message.text.strip()
-    if not nombre_nuevo:
-        await update.message.reply_text("❌ El nombre no puede estar vacío. Intenta de nuevo:")
-        return NOMBRE_NUEVO_LISTA
-
-    user_id = update.effective_user.id
-    id_lista = context.user_data.get("editar_lista_id")
-    if not id_lista:
-        await update.message.reply_text("❌ Error. Intenta de nuevo con /editar_lista")
-        return ConversationHandler.END
-
-    if db.actualizar_nombre_lista(id_lista, nombre_nuevo, user_id):
-        await update.message.reply_text(f"✅ Lista renombrada a «{nombre_nuevo.strip().lower()}»")
-    else:
-        await update.message.reply_text("❌ No se pudo actualizar la lista.")
-
-    context.user_data.pop("editar_lista_id", None)
     return ConversationHandler.END
 
 
 # --- /editar_producto ---
 async def editar_producto_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia el flujo de editar producto."""
-    await update.message.reply_text(
-        "📋 ¿De qué lista es el producto? (responde null para la última lista)"
-    )
-    return LISTA_EDITAR_PRODUCTO
-
-
-async def editar_producto_lista(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Muestra productos numerados y pide el número a editar."""
     user_id = update.effective_user.id
-    nombre_lista_input = update.message.text
-
-    if is_null(nombre_lista_input):
-        lista = db.obtener_ultima_lista(user_id)
-    else:
-        lista = db.obtener_lista_por_nombre(nombre_lista_input.strip(), user_id)
-
-    if not lista:
-        await update.message.reply_text("❌ Lista no encontrada.")
-        return ConversationHandler.END
+    lista = db.obtener_o_crear_lista_unica(user_id)
 
     productos, _ = db.calcular_total_lista(lista["id"])
     if not productos:
-        await update.message.reply_text(f"📋 La lista «{lista['nombre']}» está vacía.")
+        await update.message.reply_text("📋 Tu lista está vacía.")
         return ConversationHandler.END
 
-    context.user_data["editar_producto_lista_id"] = lista["id"]
     context.user_data["editar_productos"] = productos
 
-    lineas = [f"📋 *{lista['nombre']}* — Elige el número del producto a editar:\n"]
+    lineas = ["📋 *Tu lista* — elige el número del producto a editar:\n"]
     for i, p in enumerate(productos, 1):
         icono = "✅" if p.get("seleccionado") else "⬜"
         lineas.append(f"  {i}. {icono} {p['producto']} — ${p['precio']:.2f}")
@@ -556,28 +334,31 @@ async def editar_producto_valor(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await update.message.reply_text("❌ No se pudo actualizar el producto.")
 
-    context.user_data.pop("editar_producto_lista_id", None)
     context.user_data.pop("editar_productos", None)
     context.user_data.pop("editar_producto_id", None)
     context.user_data.pop("editar_producto_campo", None)
     return ConversationHandler.END
 
 
-async def listas_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lista todas las listas del usuario."""
+async def lista_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resumen de la lista única del usuario."""
     user_id = update.effective_user.id
-    listas = db.listar_listas_usuario(user_id)
+    lista = db.obtener_o_crear_lista_unica(user_id)
+    productos, total_todos = db.calcular_total_lista(lista["id"])
+    seleccionados = sum(1 for p in productos if p.get("seleccionado"))
+    total_marcados = sum(p["precio"] for p in productos if p.get("seleccionado"))
 
-    if not listas:
-        await update.message.reply_text("No tienes ninguna lista. Crea una con /nueva_lista")
+    if not productos:
+        await update.message.reply_text("📋 Tu lista está vacía. Usa /agregar_producto.")
         return
 
-    lineas = ["📋 *Tus listas:*\n"]
-    for l in listas:
-        productos, total = db.calcular_total_lista(l["id"])
-        seleccionados = sum(1 for p in productos if p.get("seleccionado"))
-        lineas.append(f"  • {l['nombre']} ({seleccionados}/{len(productos)} ✓, ${total:.2f})")
-
+    lineas = [
+        "📋 *Tu lista*\n",
+        f"  • Productos: {len(productos)}",
+        f"  • Marcados: {seleccionados}",
+        f"  • Total (todos los ítems): ${total_todos:.2f}",
+        f"  • Total (solo marcados): ${total_marcados:.2f}",
+    ]
     await update.message.reply_text("\n".join(lineas), parse_mode="Markdown")
 
 
@@ -591,15 +372,12 @@ async def post_init(application: Application) -> None:
     """Configura el menú de comandos que aparece al escribir / en Telegram."""
     await application.bot.set_my_commands([
         ("start", "Iniciar el bot"),
-        ("nueva_lista", "Crear una nueva lista"),
-        ("agregar_producto", "Agregar producto a una lista"),
-        ("total", "Ver total y detalle de una lista"),
-        ("marcar_producto", "Marcar/desmarcar producto como seleccionado"),
-        ("clonar_lista", "Clonar una lista con nombre nuevo"),
-        ("eliminar_lista", "Eliminar una lista"),
-        ("editar_lista", "Cambiar nombre de una lista"),
+        ("agregar_producto", "Agregar producto con precio"),
+        ("total", "Ver lista y total de seleccionados"),
+        ("marcar_producto", "Marcar o desmarcar por número"),
         ("editar_producto", "Cambiar nombre o precio de un producto"),
-        ("listas", "Ver todas tus listas"),
+        ("resetear_lista", "Vaciar toda la lista"),
+        ("lista", "Resumen de tu lista"),
     ])
 
 
@@ -619,40 +397,21 @@ def main() -> None:
         .build()
     )
 
-    # Handler para /nueva_lista
-    conv_nueva_lista = ConversationHandler(
-        entry_points=[CommandHandler("nueva_lista", nueva_lista_start)],
-        states={
-            NOMBRE_LISTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, nueva_lista_nombre)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
     # Handler para /agregar_producto
     conv_agregar = ConversationHandler(
         entry_points=[CommandHandler("agregar_producto", agregar_producto_start)],
         states={
             NOMBRE_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agregar_producto_nombre)],
             PRECIO_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agregar_producto_precio)],
-            LISTA_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, agregar_producto_lista)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Handler para /total
-    conv_total = ConversationHandler(
-        entry_points=[CommandHandler("total", total_start)],
+    # Handler para /resetear_lista
+    conv_resetear = ConversationHandler(
+        entry_points=[CommandHandler("resetear_lista", resetear_lista_start)],
         states={
-            LISTA_TOTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, total_lista)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Handler para /eliminar_lista
-    conv_eliminar = ConversationHandler(
-        entry_points=[CommandHandler("eliminar_lista", eliminar_lista_start)],
-        states={
-            LISTA_ELIMINAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, eliminar_lista_confirmar)],
+            RESET_CONFIRMAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, resetear_lista_confirmar)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -661,28 +420,7 @@ def main() -> None:
     conv_marcar = ConversationHandler(
         entry_points=[CommandHandler("marcar_producto", marcar_producto_start)],
         states={
-            LISTA_MARCAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, marcar_producto_lista)],
             NUMERO_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, marcar_producto_numero)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Handler para /clonar_lista
-    conv_clonar = ConversationHandler(
-        entry_points=[CommandHandler("clonar_lista", clonar_lista_start)],
-        states={
-            LISTA_CLONAR_ORIGEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, clonar_lista_origen)],
-            NOMBRE_CLON: [MessageHandler(filters.TEXT & ~filters.COMMAND, clonar_lista_nombre)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Handler para /editar_lista
-    conv_editar_lista = ConversationHandler(
-        entry_points=[CommandHandler("editar_lista", editar_lista_start)],
-        states={
-            LISTA_EDITAR_SELECCION: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_lista_seleccion)],
-            NOMBRE_NUEVO_LISTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_lista_nuevo_nombre)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -691,7 +429,6 @@ def main() -> None:
     conv_editar_producto = ConversationHandler(
         entry_points=[CommandHandler("editar_producto", editar_producto_start)],
         states={
-            LISTA_EDITAR_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_lista)],
             PRODUCTO_EDITAR_SELECCION: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_seleccion)],
             PRODUCTO_EDITAR_CAMPO: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_campo)],
             PRODUCTO_EDITAR_VALOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, editar_producto_valor)],
@@ -701,15 +438,12 @@ def main() -> None:
 
     application.add_handler(CallbackQueryHandler(toggle_producto_callback, pattern="^toggle:"))
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_nueva_lista)
+    application.add_handler(CommandHandler("total", total_command))
     application.add_handler(conv_agregar)
-    application.add_handler(conv_total)
-    application.add_handler(conv_eliminar)
+    application.add_handler(conv_resetear)
     application.add_handler(conv_marcar)
-    application.add_handler(conv_clonar)
-    application.add_handler(conv_editar_lista)
     application.add_handler(conv_editar_producto)
-    application.add_handler(CommandHandler("listas", listas_command))
+    application.add_handler(CommandHandler("lista", lista_command))
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

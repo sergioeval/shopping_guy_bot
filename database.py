@@ -6,6 +6,9 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "shopping.db"
 
+# Nombre fijo de la única lista por usuario (visible en mensajes).
+LISTA_UNICA_NOMBRE = "compras"
+
 
 def get_connection():
     """Obtiene una conexión a la base de datos."""
@@ -42,6 +45,60 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # La columna ya existe
         conn.commit()
+    finally:
+        conn.close()
+
+
+def consolidar_listas_usuario(user_id: int) -> None:
+    """Si el usuario tiene varias listas (datos antiguos), deja una sola y mueve los productos."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM listas WHERE user_id = ? ORDER BY id ASC",
+            (user_id,),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if len(ids) <= 1:
+            return
+        principal = ids[0]
+        for lid in ids[1:]:
+            conn.execute(
+                "UPDATE productos SET id_lista = ? WHERE id_lista = ?",
+                (principal, lid),
+            )
+            conn.execute("DELETE FROM listas WHERE id = ?", (lid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def obtener_o_crear_lista_unica(user_id: int) -> dict:
+    """Devuelve la única lista del usuario; la crea vacía si no existe."""
+    consolidar_listas_usuario(user_id)
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, nombre, timestamp_creacion FROM listas WHERE user_id = ? ORDER BY id LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if row:
+            return dict(row)
+    finally:
+        conn.close()
+    nueva_id = crear_lista(LISTA_UNICA_NOMBRE, user_id)
+    row = obtener_lista_por_id(nueva_id, user_id)
+    assert row is not None
+    return row
+
+
+def vaciar_productos_lista_unica(user_id: int) -> int:
+    """Elimina todos los productos de la lista única. Retorna cuántos se borraron."""
+    lista = obtener_o_crear_lista_unica(user_id)
+    conn = get_connection()
+    try:
+        cur = conn.execute("DELETE FROM productos WHERE id_lista = ?", (lista["id"],))
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 
